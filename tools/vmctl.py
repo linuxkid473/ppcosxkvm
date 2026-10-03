@@ -6,7 +6,7 @@ Start the VM with `./ppcosx run --monitor` (or `install --monitor`), then:
     tools/vmctl.py cmd '<HMP command>'     e.g. cmd 'info pci'
     tools/vmctl.py type 'text'             type into the guest
     tools/vmctl.py key meta_l-q            one key combo (HMP sendkey syntax)
-    tools/vmctl.py shot out.png            screenshot
+    tools/vmctl.py shot out.png            screenshot (out.ppm: QEMU's raw dump)
     tools/vmctl.py click X Y [right]       click / dclick / move / drag x0 y0 x1 y1
 
 Coordinates are guest pixels; the screen size is read from the VM
@@ -14,7 +14,7 @@ Coordinates are guest pixels; the screen size is read from the VM
 the centre by 1.1775; the installer DVD does not, so set VMCTL_SCALE=1 while
 driving the installer.
 """
-import socket, sys, time, json, os, subprocess
+import socket, sys, time, json, os, re, struct, zlib
 
 def hmp(cmd, wait=0.3):
     s = socket.create_connection(('127.0.0.1', 4444))
@@ -137,12 +137,49 @@ def typ(text, delay=0.03):
     time.sleep(0.3)
     s.close()
 
+def read_ppm(path, timeout=10):
+    """Width, height and RGB bytes of a P6 screendump, once QEMU has
+    written all of it."""
+    end = time.time() + timeout
+    while True:
+        try:
+            with open(path, 'rb') as f:
+                data = f.read()
+            m = re.match(rb'P6\s+(\d+)\s+(\d+)\s+255\s', data)
+            if m:
+                w, h = int(m.group(1)), int(m.group(2))
+                pix = data[m.end():]
+                if len(pix) >= w * h * 3:
+                    return w, h, pix[:w * h * 3]
+        except FileNotFoundError:
+            pass
+        if time.time() > end:
+            sys.exit('vmctl: no complete screendump in %s' % path)
+        time.sleep(0.05)
+
+def write_png(path, w, h, rgb):
+    """RGB bytes as an 8-bit truecolour PNG (no image libraries needed)."""
+    def chunk(tag, data):
+        return (struct.pack('>I', len(data)) + tag + data +
+                struct.pack('>I', zlib.crc32(tag + data) & 0xffffffff))
+    stride = w * 3
+    raw = b''.join(b'\0' + rgb[y * stride:(y + 1) * stride] for y in range(h))
+    with open(path, 'wb') as f:
+        f.write(b'\x89PNG\r\n\x1a\n' +
+                chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)) +
+                chunk(b'IDAT', zlib.compress(raw, 6)) + chunk(b'IEND', b''))
+
 def shot(path):
-    tmp = path + '.ppm'
-    hmp('screendump "%s"' % os.path.abspath(tmp), 1.5)
-    subprocess.run(['sips', '-s', 'format', 'png', tmp, '--out', path],
-                   capture_output=True)
-    os.remove(tmp)
+    """Screenshot as PNG, or as QEMU's raw PPM if path ends in .ppm."""
+    ppm = path.endswith('.ppm')
+    tmp = path if ppm else path + '.ppm'
+    if os.path.exists(tmp):
+        os.remove(tmp)
+    hmp('screendump "%s"' % os.path.abspath(tmp), 0.3)
+    w, h, rgb = read_ppm(tmp)
+    if not ppm:
+        write_png(path, w, h, rgb)
+        os.remove(tmp)
 
 NARGS = {'cmd': (1, 2), 'type': (1, 1), 'key': (1, 1), 'shot': (1, 1),
          'click': (2, 3), 'dclick': (2, 2), 'move': (2, 2), 'drag': (4, 4)}

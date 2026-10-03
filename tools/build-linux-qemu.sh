@@ -27,9 +27,11 @@ mkdir -p "$build"
 python3 -m venv "$venv"
 "$venv/bin/python3" -m pip install -q distlib
 
+# dtc:werror: see setup_build in ppcosx (the bundled dtc's own -Werror).
 (cd "$build" && ../configure --python="$venv/bin/python3" \
     --target-list=ppc-softmmu --disable-docs --disable-sdl \
-    --enable-gtk --enable-pa --enable-slirp --disable-werror -Doptimization=2)
+    --enable-gtk --enable-pa --enable-slirp --disable-werror -Doptimization=2 \
+    -Ddtc:werror=false)
 ninja -C "$build" -j "$(nproc)" qemu-system-ppc qemu-img
 
 d="$stage/ppcosx-qemu"

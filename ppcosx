@@ -461,11 +461,20 @@ setup_build() {
     ok "Python $("$venv/bin/python3" -c 'import platform; print(platform.python_version())') with distlib"
 
     say "Building QEMU (qemu-system-ppc only; this takes a few minutes)"
+    # dtc:werror: the bundled dtc (used without a system libfdt) builds
+    # with -Werror of its own, which --disable-werror does not reach, and
+    # glibc 2.43's const-preserving strchr makes it warn (Ubuntu 26.04).
+    # A build configured without it by an older ppcosx is configured
+    # again: meson configure in place would also turn QEMU's -Werror back on.
+    if [ -f "$QEMU_BUILD/build.ninja" ] && [ -d "$QEMU_BUILD/subprojects/dtc" ] &&
+       ! grep -Eq 'dtc:werror +: false' "$QEMU_BUILD/ppcosx-configure.log" 2>/dev/null; then
+        rm -rf "$QEMU_BUILD"
+    fi
     mkdir -p "$QEMU_BUILD"
     if [ ! -f "$QEMU_BUILD/build.ninja" ]; then
         (cd "$QEMU_BUILD" && ../configure --python="$venv/bin/python3" \
             --target-list=ppc-softmmu --disable-docs --disable-sdl \
-            --disable-werror -Doptimization=2) \
+            --disable-werror -Doptimization=2 -Ddtc:werror=false) \
             > "$QEMU_BUILD/ppcosx-configure.log" 2>&1 \
             || { tail -30 "$QEMU_BUILD/ppcosx-configure.log"
                  die "configure failed; full log: qemu/build/ppcosx-configure.log"; }
